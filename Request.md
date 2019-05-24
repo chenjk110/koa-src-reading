@@ -134,7 +134,7 @@ get stale() {
 get idempotent() {
   // 幂等方法列表
   const methods = ['GET', 'HEAD', 'PUT', 'DELETE', 'OPTIONS', 'TRACE'];
-  // 这边的位操作符"~"与indexOf的常规结合用法，即： ~[负数] => 0, ~[非负数] => -1
+  // 这边的位操作符"~"与indexOf的常规结合用法，即： ~[-1] => 0, ~[0] => -1
   // !! 将值转换成boolean类型
   return !!~methods.indexOf(this.method);
 }
