@@ -364,3 +364,36 @@ onerror(err) {
 }
 ```
 
+## 8. toJSON(), inspect() 辅助方法
+
+```js
+/**
+   * Return JSON representation.
+   * We only bother showing settings.
+   *
+   * @return {Object}
+   * @api public
+   */
+// only库是返回一个对象对于白名单下的属性
+// 官方解释：Return whitelisted properties of an object.
+// 例如：toJSON() -> { subdomainOffset: 2, proxy: false, env: 'development' }
+toJSON() {
+  return only(this, [
+    'subdomainOffset',
+    'proxy',
+    'env'
+  ]);
+}
+
+/**
+   * Inspect implementation.
+   *
+   * @return {Object}
+   * @api public
+   */
+// 方便Node的inspector机制调用
+inspect() {
+  return this.toJSON();
+}
+```
+
