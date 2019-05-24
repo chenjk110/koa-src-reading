@@ -37,7 +37,7 @@ module.exports = class Application extends Emitter { // 继承了Node原生模�
 }
 ```
 
-##2.中间件的注册与处理，use()方法
+## 2.中间件的注册与处理，use()方法
 
 ```js
 const convert = require('koa-convert');
@@ -187,7 +187,7 @@ function compose (middleware) {
       
       if (i === middleware.length) fn = next // 到达最后一个中间件
       
-      if (!fn) return Promise.resolve() // next非函数，则直接resove
+      if (!fn) return Promise.resolve() // next非函数，则直接resolve
       
       try {
         // 递归调用下一个next，这边是实现洋葱模式运行流关键步骤
