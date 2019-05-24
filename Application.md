@@ -271,7 +271,7 @@ handleRequest(ctx, fnMiddleware) {
 }
 ```
 
-## 8. 自定义请求回复处理
+## 6. 自定义请求回复处理respond()
 
 ```js
 function respond(ctx) {
