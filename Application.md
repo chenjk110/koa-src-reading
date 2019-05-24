@@ -14,7 +14,7 @@ module.exports = class Application extends Emitter { // 继承了Node原生模�
 
   constructor() {
     super();
-		
+
     this.proxy = false; // 代理方式标识
     this.subdomainOffset = 2; // toJSON的方法调用
     this.env = process.env.NODE_ENV || 'development'; // 环境变量
@@ -63,13 +63,13 @@ use(fn) {
               'https://github.com/koajs/koa/blob/master/docs/migration.md');
     
     /* 核心步骤1: 利用koa-convert转换传入的中间价函数fn */
-		fn = convert(fn);
+    fn = convert(fn);
     
   }
   
   debug('use %s', fn._name || fn.name || '-'); // debug提醒
   
-	/* 核心步骤2: 将处理后的fn推入到this.middleware数组中 */
+  /* 核心步骤2: 将处理后的fn推入到this.middleware数组中 */
   this.middleware.push(fn);
   
   // 返回当前实例
@@ -144,11 +144,13 @@ function * createGenerator (next) {
 		
     // 定义请求处理函数，最终用于httpServer
     const handleRequest = (req, res) => {
-      const ctx = this.createContext(req, res); // 自定义创建上下文ctx
+      // 自定义创建上下文ctx，每次请求都需要创建一个与该request关联的上下文ctx实例
+      const ctx = this.createContext(req, res);
+      
       return this.handleRequest(ctx, fn); // 自定义请求处理
     };
 
-    return handleRequest;
+    return handleRequest; // 执行 callback(), 返回请求处理回调
   }
 ```
 
@@ -197,6 +199,168 @@ function compose (middleware) {
       }
     }
   }
+}
+```
+
+## 4.创建上下文ctx
+
+每一次请求开始，都会创建一个基于this.context(构造函数那边注入到this)为原型的该请求的上下文ctx实例，并且这个ctx生命周期会贯穿整个请求流程，包括一系列中间件的执行，中间件通过ctx对象获取来自一切上游的数据共享。在任何中间件中，你可以修改、添加、获取任何ctx上的参数值，所以ctx实例是整个请求流的数据交通枢纽。但需要注意的一点是，中间件执行是有顺序，需要基于"U"形操作流对数据进行读写。
+
+```js
+/**
+   * Initialize a new context.
+   *
+   * @api private
+   */
+createContext(req, res) {
+  const context = Object.create(this.context); // 基于context创建 -> ctx
+  const request = context.request = Object.create(this.request); // 注入: request -> ctx
+  const response = context.response = Object.create(this.response); // 注入: respone -> ctx
+  
+  // 由于context是独立解耦的，所以每次请求，得进行其他属性的关联注入
+  context.app = request.app = response.app = this;
+  context.req = request.req = response.req = req;
+  context.res = request.res = response.res = res;
+  
+  // request注入ctx
+  request.ctx = response.ctx = context;
+  
+  // request、response相互引用
+  request.response = response;
+  response.request = request;
+  
+  context.originalUrl = request.originalUrl = req.url;
+  context.state = {};
+  
+  // 最终返回关联后的ctx实例
+  return context;
+}
+```
+
+## 5.自定义的请求处理
+
+从上文callback()函数里可以看出，callback作为创建的httpServer实例的处理回调函数，任何一次请求都会触发callback()返回的内部handleRequest函数，而handleRequest主要有两个内容:
+
+1.创建上下文ctx
+
+2.处理请求handleRequest(ctx, fn)
+
+以下就是处理请求的handleRequest函数
+
+```js
+/**
+   * Handle request in callback.
+   *
+   * @api private
+   */
+// 在callback()方法中使用的请求处理
+// ctx 是在callback()中通过createContext()创建的实例ctx
+// fnMiddleware 是在callback()中通过compose()合并后的`大洋葱`中间件函数
+handleRequest(ctx, fnMiddleware) {
+  const res = ctx.res;
+  res.statusCode = 404; // 默认设置statusCode为404,当任何中间件未修改statusCode则是返回404
+  
+  const onerror = err => ctx.onerror(err); // 重新定义onerror函数
+  const handleResponse = () => respond(ctx); // 处理回复，respond为外部定义的一个统一处理回复的函数
+  
+  // 结束请求处理，调用外部的'on-finished'库，
+  // 官方解释：Execute a callback when a HTTP request closes, finishes, or errors.
+  onFinished(res, onerror); 
+  
+  return fnMiddleware(ctx).then(handleResponse).catch(onerror); // 执行回复处理
+}
+```
+
+## 8. 自定义请求回复处理
+
+```js
+function respond(ctx) {
+  // allow bypassing koa
+  if (false === ctx.respond) return;
+
+  if (!ctx.writable) return;
+
+  const res = ctx.res;
+  let body = ctx.body;
+  const code = ctx.status;
+
+  // ignore body
+  // 使用statuses库，判断返回的code是否需要body字段
+  // API说明：Returns true if a status code expects an empty body.
+	// API用例：
+  // status.empty[200] // => undefined
+  // status.empty[204] // => true // 走缓存
+  // status.empty[304] // => true // 重定向，走缓存
+  if (statuses.empty[code]) {
+    // strip headers
+    ctx.body = null;
+    return res.end(); // 不需要body信息，则直接调用res.end()返回结果
+  }
+	
+  // HEAD请求，不回复body，但需要获取body的数据长度
+  if ('HEAD' == ctx.method) {
+    if (!res.headersSent && isJSON(body)) {
+      // 返回body长度lenth
+      ctx.length = Buffer.byteLength(JSON.stringify(body));
+    }
+    return res.end();
+  }
+
+  // status body 返回状态形式的body信息，非实际数据
+  // HTTP请求的通用返回格式，如果请求中的accept未指定接受的格式，
+  // 则HTTP默认是content-type: '*/*';
+  // 这边默认构造type -> 'text', body -> HTTP版本 >= 2 返回code, 否则返回message或者code
+  if (null == body) { // body -> null, undefined
+    if (ctx.req.httpVersionMajor >= 2) {
+      body = String(code);
+    } else {
+      body = ctx.message || String(code);
+    }
+    if (!res.headersSent) {
+      ctx.type = 'text';
+      ctx.length = Buffer.byteLength(body);
+    }
+    return res.end(body);
+  }
+
+  // responses
+  if (Buffer.isBuffer(body)) return res.end(body); // 返回二进制数据流
+  if ('string' == typeof body) return res.end(body); // 返回文本数据
+  
+  // 流的形式返回结果，通过pipe管道移交给下一个请求处理
+  if (body instanceof Stream) return body.pipe(res);
+
+  // body: json // 这个就是不解释了
+  body = JSON.stringify(body);
+  if (!res.headersSent) {
+    ctx.length = Buffer.byteLength(body);
+  }
+  res.end(body);
+}
+```
+
+
+
+## 7. 错误处理onerror
+
+```js
+  /**
+   * Default error handler.
+   *
+   * @param {Error} err
+   * @api private
+   */
+
+onerror(err) {
+  if (!(err instanceof Error)) throw new TypeError(util.format('non-error thrown: %j', err));
+	
+  if (404 == err.status || err.expose) return; // 404或者错误已经向上抛了，则不处理
+  if (this.silent) return; // this.slient 信息提示开关
+
+  const msg = err.stack || err.toString(); // 获取错误栈信息
+  console.error();
+  console.error(msg.replace(/^/gm, '  '));
+  console.error();
 }
 ```
 
